@@ -90,11 +90,11 @@
   const page = text(FILES["__page.html"]).replace(/\{\{vfs:([^}]+)\}\}/g, (m, p) => blobFor(p));
   delete FILES["__page.html"];
   document.open(); document.write(page); document.close();
-const manifest=document.createElement('link');sa.call(manifest,'rel','manifest');sa.call(manifest,'href','./manifest.webmanifest');document.head.append(manifest);
+setTimeout(()=>{const manifest=document.createElement('link');sa.call(manifest,'rel','manifest');sa.call(manifest,'href','./manifest.webmanifest');document.head.append(manifest);
 const install=document.createElement('button');install.textContent='Install / Offline';install.style.cssText='position:fixed;right:8px;bottom:5px;z-index:20000;padding:6px 10px;font:13px sans-serif';document.body.append(install);
 let promptEvent=null;let offlineReady=false;window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();promptEvent=e;install.textContent='Install Paint'});
 install.onclick=async()=>{if(promptEvent){await promptEvent.prompt();await promptEvent.userChoice;promptEvent=null;install.textContent='Install / Offline'}else alert((offlineReady?'Offline files are saved on this device.':'Offline download is still preparing or failed. Stay online until it finishes.')+'\n\nTo install in Android Chrome, open the three-dot menu and choose Install app or Add to Home screen when available.\n\nSave drawings as image files before closing. Clipboard fallback stays in this tab only.')};
-if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').then(()=>navigator.serviceWorker.ready).then(()=>{offlineReady=true;install.title='Offline files are saved. Tap for installation help.'}).catch(error=>{install.textContent='Offline setup failed';install.title=error.message});
+if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').then(()=>navigator.serviceWorker.ready).then(()=>{offlineReady=true;install.title='Offline files are saved. Tap for installation help.'}).catch(error=>{install.textContent='Offline setup failed';install.title=error.message});},0);
 
 })();
 </script></body></html>
