@@ -1,0 +1,100 @@
+<!doctype html><html><head><meta charset="utf-8"><title>JS Paint Offline (repaired)</title></head><body><script>(async () => {
+  "use strict";
+  const compressed=await Promise.all(["13-part-0.bin","14-part-1.bin","15-part-2.bin","16-part-3.bin","17-part-4.bin"].map(p=>fetch(p).then(r=>{if(!r.ok)throw Error("App download failed");return r.arrayBuffer()})));const stream=new Blob(compressed).stream().pipeThrough(new DecompressionStream("gzip"));const FILES=JSON.parse(await new Response(stream).text());
+  const BASE = location.href.split(/[?#]/)[0].replace(/[^/]*$/, "");
+  const SELF = location.pathname.split("/").pop();
+  const MIME = { css: "text/css", js: "text/javascript", mjs: "text/javascript", json: "application/json", html: "text/html",
+    svg: "image/svg+xml", png: "image/png", gif: "image/gif", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp",
+    ico: "image/x-icon", wav: "audio/wav", mp3: "audio/mpeg", ogg: "audio/ogg", woff: "font/woff", woff2: "font/woff2",
+    ttf: "font/ttf", wasm: "application/wasm", md: "text/plain", txt: "text/plain" };
+  const bytes = b => Uint8Array.from(atob(b), c => c.charCodeAt(0));
+  const text = b => new TextDecoder().decode(bytes(b));
+  const norm = (rel, from) => decodeURIComponent(new URL(rel, "https://v.invalid/" + from).pathname.slice(1));
+  const hit = (r, from) => !/^(data:|blob:|https?:|\/\/|#)/i.test(r) && (norm(r.split(/[?#]/)[0], from) in FILES);
+  const blobs = new Map(), rev = new Map();
+
+  function blobFor(k) {
+    let u = blobs.get(k);
+    if (u) return u;
+    const ext = k.split(".").pop().toLowerCase();
+    let body;
+    if (ext === "css") {
+      body = text(FILES[k])
+        .replace(/url\(\s*(["']?)([^)"']+)\1\s*\)/g, (m, q, r) => hit(r, k) ? `url("${blobFor(norm(r.split(/[?#]/)[0], k))}")` : m)
+        .replace(/@import\s+(["'])([^"']+)\1/g, (m, q, r) => hit(r, k) ? `@import "${blobFor(norm(r, k))}"` : m);
+    } else body = bytes(FILES[k]);
+    u = URL.createObjectURL(new Blob([body], { type: MIME[ext] || "application/octet-stream" }));
+    blobs.set(k, u); rev.set(u, k);
+    return u;
+  }
+  const keyOf = u => {
+    try {
+      const a = new URL(u, document.baseURI).href.split(/[?#]/)[0];
+      return a.startsWith(BASE) ? decodeURIComponent(a.slice(BASE.length)) : null;
+    } catch { return null; }
+  };
+  const toBlob = u => {
+    u = String(u);
+    if (!u || /^(blob:|data:|javascript:)/i.test(u)) return u;
+    const k = keyOf(u);
+    if (k === null || k === SELF) return u;
+    if (k in FILES) return blobFor(k);
+    console.warn("[offline] not bundled:", k);
+    return u;
+  };
+  const toOrig = u => (rev.has(u) ? BASE + rev.get(u) : u);
+
+  const patch = (proto, prop) => {
+    const d = Object.getOwnPropertyDescriptor(proto, prop);
+    if (!d || !d.set) return;
+    Object.defineProperty(proto, prop, { configurable: true, enumerable: d.enumerable,
+      get() { return toOrig(d.get.call(this)); }, set(v) { d.set.call(this, toBlob(v)); } });
+  };
+  [[HTMLImageElement, "src"], [HTMLScriptElement, "src"], [HTMLSourceElement, "src"],
+   [HTMLMediaElement, "src"], [HTMLIFrameElement, "src"], [HTMLLinkElement, "href"]].forEach(([C, p]) => patch(C.prototype, p));
+
+  const TAGS = /^(IMG|SCRIPT|SOURCE|AUDIO|VIDEO|IFRAME|LINK)$/;
+  const sa = Element.prototype.setAttribute, ga = Element.prototype.getAttribute;
+  Element.prototype.setAttribute = function (n, v) {
+    return sa.call(this, n, /^(src|href)$/i.test(n) && TAGS.test(this.tagName) ? toBlob(v) : v);
+  };
+  Element.prototype.getAttribute = function (n) {
+    const v = ga.call(this, n);
+    return v && /^(src|href)$/i.test(n) && rev.has(v) ? rev.get(v) : v;
+  };
+
+  const F = window.fetch;
+  window.fetch = (i, o) => F.call(window, i instanceof Request ? new Request(toBlob(i.url), i) : toBlob(i), o);
+  const xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u, ...r) { return xo.call(this, m, toBlob(u), ...r); };
+  const W = window.Worker;
+  window.Worker = class extends W { constructor(u, o) { super(toBlob(u), o); } };
+
+  const rewriteCSS = s => String(s).replace(/url\(\s*(["']?)([^)"']+)\1\s*\)/g, (m,q,u) => `url("${toBlob(u)}")`);
+  const styleSet = CSSStyleDeclaration.prototype.setProperty;
+  CSSStyleDeclaration.prototype.setProperty = function(n,v,p) { return styleSet.call(this,n,rewriteCSS(v),p); };
+  for (const prop of ["cssText", "cursor", "background", "backgroundImage", "listStyleImage", "borderImageSource", "maskImage"]) {
+    const d=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,prop);
+    if(d?.set)Object.defineProperty(CSSStyleDeclaration.prototype,prop,{...d,set(v){d.set.call(this,rewriteCSS(v));}});
+  }
+  const styled=new WeakSet();
+  for(const C of [HTMLElement,SVGElement]){
+    const sd=Object.getOwnPropertyDescriptor(C.prototype,"style");
+    if(!sd?.get)continue;
+    Object.defineProperty(C.prototype,"style",{...sd,get(){const st=sd.get.call(this);if(!styled.has(st)){styled.add(st);for(const prop of ["cursor","background","backgroundImage","listStyleImage","borderImageSource","maskImage"]){const css=prop.replace(/[A-Z]/g,m=>"-"+m.toLowerCase());Object.defineProperty(st,prop,{configurable:true,enumerable:true,get(){return st.getPropertyValue(css);},set(v){styleSet.call(st,css,rewriteCSS(v),"");}});}}return st;}});
+  }
+  const rewriteMarkup = s => String(s).split(/(<script[\s\S]*?<\/script>)/gi).map((part,i)=>i%2?part:part.replace(/\b(src|href|poster)=(["'])([^"']+)\2/g,(m,a,q,u)=> { const k=keyOf(u);return k in FILES ? `${a}=${q}${blobFor(k)}${q}` : m; }).replace(/url\(\s*(["']?)([^)"']+)\1\s*\)/g,(m,q,u)=>`url("${toBlob(u)}")`)).join("");
+  const ih=Object.getOwnPropertyDescriptor(Element.prototype,"innerHTML");
+  Object.defineProperty(Element.prototype,"innerHTML",{...ih,set(v){ih.set.call(this,rewriteMarkup(v));}});
+  const dw=document.write.bind(document);document.write=(...parts)=>dw(...parts.map(s=> /<!doctype|<html/i.test(s)?rewriteMarkup(s):rewriteMarkup(String(s).replace(/<script\b([^>]*?)src=(["'])([^"']+)\2/gi,(m,a,q,u)=>`<script${a}src=${q}${toBlob(u)}${q}`))));
+  const page = text(FILES["__page.html"]).replace(/\{\{vfs:([^}]+)\}\}/g, (m, p) => blobFor(p));
+  delete FILES["__page.html"];
+  document.open(); document.write(page); document.close();
+const manifest=document.createElement('link');sa.call(manifest,'rel','manifest');sa.call(manifest,'href','./manifest.webmanifest');document.head.append(manifest);
+const install=document.createElement('button');install.textContent='Install / Offline';install.style.cssText='position:fixed;right:8px;bottom:5px;z-index:20000;padding:6px 10px;font:13px sans-serif';document.body.append(install);
+let promptEvent=null;let offlineReady=false;window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();promptEvent=e;install.textContent='Install Paint'});
+install.onclick=async()=>{if(promptEvent){await promptEvent.prompt();await promptEvent.userChoice;promptEvent=null;install.textContent='Install / Offline'}else alert((offlineReady?'Offline files are saved on this device.':'Offline download is still preparing or failed. Stay online until it finishes.')+'\n\nTo install in Android Chrome, open the three-dot menu and choose Install app or Add to Home screen when available.\n\nSave drawings as image files before closing. Clipboard fallback stays in this tab only.')};
+if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').then(()=>navigator.serviceWorker.ready).then(()=>{offlineReady=true;install.title='Offline files are saved. Tap for installation help.'}).catch(error=>{install.textContent='Offline setup failed';install.title=error.message});
+
+})();
+</script></body></html>
